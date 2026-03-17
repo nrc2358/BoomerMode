@@ -1,3 +1,4 @@
+---@diagnostic disable: deprecated
 -- =============================================================================
 -- modules/GearAdvisor.lua
 -- Hooks the game tooltip and appends a single, colour-coded verdict line:
@@ -56,6 +57,8 @@ local DOUBLE_SLOTS = {
 local function SafeGetItemInfo(link)
     if C_Item and C_Item.GetItemInfo then
         return C_Item.GetItemInfo(link)
+    elseif GetItemInfo then
+        return GetItemInfo(link)
     end
     return nil
 end
@@ -65,12 +68,10 @@ end
 -- ---------------------------------------------------------------------------
 local function GetEffectiveIlvl(link)
     if not link then return nil end
-    if C_Item and C_Item.GetDetailedItemLevelInfo then
-        local ok, ilvl = pcall(C_Item.GetDetailedItemLevelInfo, link)
-        if ok and ilvl and ilvl > 0 then return ilvl end
+    if GetDetailedItemLevelInfo then
+        local ilvl = GetDetailedItemLevelInfo(link)
+        if ilvl and ilvl > 0 then return ilvl end
     end
-    local ok2, _, _, _, baseIlvl = pcall(SafeGetItemInfo, link)
-    if ok2 and baseIlvl and baseIlvl > 0 then return baseIlvl end
     return nil
 end
 
@@ -85,6 +86,22 @@ local function GetEquippedIlvl(slotID)
     end
     local link = GetInventoryItemLink("player", slotID)
     return link and GetEffectiveIlvl(link)
+end
+
+-- Use ItemLocation for bag items — always returns the correct post-squish ilvl.
+local function GetBagItemIlvl(bag, slot)
+    if ItemLocation and C_Item and C_Item.GetCurrentItemLevel then
+        local loc = ItemLocation:CreateFromBagAndSlot(bag, slot)
+        if loc and loc:IsValid() then
+            local ilvl = C_Item.GetCurrentItemLevel(loc)
+            if ilvl and ilvl > 0 then return ilvl end
+        end
+    end
+    local info = C_Container.GetContainerItemInfo(bag, slot)
+    if info and info.hyperlink then
+        return GetEffectiveIlvl(info.hyperlink)
+    end
+    return nil
 end
 
 -- ---------------------------------------------------------------------------
@@ -314,7 +331,7 @@ function GA:ScanBagUpgrades()
                    and equipLoc ~= "INVTYPE_NON_EQUIP"
                    and equipLoc ~= "INVTYPE_BAG"
                    and equipLoc ~= "INVTYPE_QUIVER" then
-                    local hoverIlvl = GetEffectiveIlvl(link)
+                    local hoverIlvl = GetBagItemIlvl(bag, slot)
                     if hoverIlvl and hoverIlvl > 0 then
                         local doubleSlots = DOUBLE_SLOTS[equipLoc]
                         local slotIDs = doubleSlots or (EQUIP_SLOT[equipLoc] and { EQUIP_SLOT[equipLoc] })
@@ -359,7 +376,8 @@ end
 function GA:OnEvent(event, ...)
     if event == "UPDATE_INVENTORY_DURABILITY" then
         self:CheckDurability()
-    elseif event == "BAG_UPDATE_DELAYED" or event == "PLAYER_EQUIPMENT_CHANGED" then
+    elseif event == "BAG_UPDATE_DELAYED" or event == "PLAYER_EQUIPMENT_CHANGED"
+           or event == "LOOT_CLOSED" then
         C_Timer.After(1, function() GA:ScanBagUpgrades() end)
     elseif event == "PLAYER_ENTERING_WORLD" then
         C_Timer.After(3, function()
