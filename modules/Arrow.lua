@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 -- =============================================================================
 -- modules/Arrow.lua
 -- Navigation — automatic quest-objective waypoints.

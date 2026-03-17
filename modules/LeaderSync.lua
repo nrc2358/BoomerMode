@@ -1,3 +1,4 @@
+---@diagnostic disable: undefined-global
 -- =============================================================================
 -- modules/LeaderSync.lua
 -- Leader dashboard + group-wide addon-message protocol.

@@ -16,7 +16,7 @@ local DB_DEFAULTS = {
     positions      = {},
     arrow          = { enabled = true, bannerEnabled = true },
     quests         = { enabled = true },
-    gear           = { enabled = true },
+    gear           = { tooltipsEnabled = true, durabilityEnabled = true },
     leaderSync     = { enabled = true },
     lootReminder   = true,
     framesLocked   = false,
@@ -132,17 +132,17 @@ local function BuildSettings()
     end)
 
     AddToggle("Gear Advisor Tooltips", function()
-        return BoomerModeDB.gear.enabled ~= false
+        return BoomerModeDB.gear.tooltipsEnabled ~= false
     end, function()
         local mod = BoomerMode.modules.GearAdvisor
-        if mod then mod:Toggle() end
+        if mod then mod:ToggleTooltips() end
     end)
 
     AddToggle("Gear Durability Alerts", function()
-        return BoomerModeDB.gear.enabled ~= false
+        return BoomerModeDB.gear.durabilityEnabled ~= false
     end, function()
         local mod = BoomerMode.modules.GearAdvisor
-        if mod then mod:Toggle() end
+        if mod then mod:ToggleDurability() end
     end)
 
     AddToggle("Loot Pickup Reminders", function()
@@ -366,8 +366,6 @@ eventFrame:SetScript("OnEvent", function(self, event, ...)
             -- Register addon-message prefix (C_ChatInfo is the modern API).
             if C_ChatInfo then
                 C_ChatInfo.RegisterAddonMessagePrefix("BoomerMode")
-            else
-                RegisterAddonMessagePrefix("BoomerMode")
             end
             -- Initialise modules in declared order.
             for _, modName in ipairs(INIT_ORDER) do

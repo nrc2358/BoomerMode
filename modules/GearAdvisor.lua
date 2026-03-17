@@ -12,7 +12,8 @@
 local GA = {}
 BoomerMode.modules.GearAdvisor = GA
 
-local enabled = true
+local tooltipsEnabled   = true
+local durabilityEnabled = true
 
 -- ---------------------------------------------------------------------------
 -- Slot mapping  (WoW's INVTYPE_* strings → inventory slot IDs)
@@ -50,48 +51,70 @@ local DOUBLE_SLOTS = {
 }
 
 -- ---------------------------------------------------------------------------
--- Safe wrapper for GetItemInfo (global in some builds, C_Item in others).
+-- Safe wrapper for GetItemInfo — prefers modern C_Item API.
 -- ---------------------------------------------------------------------------
 local function SafeGetItemInfo(link)
     if C_Item and C_Item.GetItemInfo then
         return C_Item.GetItemInfo(link)
-    elseif GetItemInfo then
-        return GetItemInfo(link)
     end
     return nil
 end
 
 -- ---------------------------------------------------------------------------
 -- Get the effective (scaled) item level from an item link.
--- GetDetailedItemLevelInfo is available since Legion and should persist into
--- Midnight — mark for version verification.
 -- ---------------------------------------------------------------------------
 local function GetEffectiveIlvl(link)
     if not link then return nil end
-    if GetDetailedItemLevelInfo then
-        local ilvl = select(1, GetDetailedItemLevelInfo(link))
-        if ilvl and ilvl > 0 then return ilvl end
+    if C_Item and C_Item.GetDetailedItemLevelInfo then
+        local ok, ilvl = pcall(C_Item.GetDetailedItemLevelInfo, link)
+        if ok and ilvl and ilvl > 0 then return ilvl end
     end
-    -- Fallback: read base ilvl.
-    local ok, _, _, _, baseIlvl = pcall(SafeGetItemInfo, link)
-    if ok and baseIlvl and baseIlvl > 0 then return baseIlvl end
+    local ok2, _, _, _, baseIlvl = pcall(SafeGetItemInfo, link)
+    if ok2 and baseIlvl and baseIlvl > 0 then return baseIlvl end
     return nil
+end
+
+-- Use ItemLocation for equipped slots so post-upgrade ilvls are always fresh.
+local function GetEquippedIlvl(slotID)
+    if ItemLocation and C_Item and C_Item.GetCurrentItemLevel then
+        local loc = ItemLocation:CreateFromEquipmentSlot(slotID)
+        if loc and loc:IsValid() then
+            local ilvl = C_Item.GetCurrentItemLevel(loc)
+            if ilvl and ilvl > 0 then return ilvl end
+        end
+    end
+    local link = GetInventoryItemLink("player", slotID)
+    return link and GetEffectiveIlvl(link)
 end
 
 -- ---------------------------------------------------------------------------
 -- Core comparison logic
 -- ---------------------------------------------------------------------------
+local isProcessing = false   -- guard against tooltip recursion
+
 local function AppendComparison(tooltip, link)
-    if not enabled then return end
+    if isProcessing then return end
+    if not tooltipsEnabled then return end
     if not link then return end
 
+    isProcessing = true
+
     -- Get the equipLocation and ilvl of the hover item.
-    local _, _, _, _, _, _, _, _, equipLoc = SafeGetItemInfo(link)
-    if not equipLoc or equipLoc == "" or equipLoc == "INVTYPE_NON_EQUIP" then return end
-    if equipLoc == "INVTYPE_BAG" or equipLoc == "INVTYPE_QUIVER" then return end
+    local ok, _, _, _, _, _, _, _, _, equipLoc = pcall(SafeGetItemInfo, link)
+    if not ok or not equipLoc or equipLoc == "" or equipLoc == "INVTYPE_NON_EQUIP" then
+        isProcessing = false
+        return
+    end
+    if equipLoc == "INVTYPE_BAG" or equipLoc == "INVTYPE_QUIVER" then
+        isProcessing = false
+        return
+    end
 
     local hoverIlvl = GetEffectiveIlvl(link)
-    if not hoverIlvl then return end
+    if not hoverIlvl then
+        isProcessing = false
+        return
+    end
 
     -- Find the best equipped item level in the relevant slot(s).
     local doubleSlots = DOUBLE_SLOTS[equipLoc]
@@ -100,7 +123,10 @@ local function AppendComparison(tooltip, link)
         slotIDs = doubleSlots
     else
         local s = EQUIP_SLOT[equipLoc]
-        if not s then return end
+        if not s then
+            isProcessing = false
+            return
+        end
         slotIDs = { s }
     end
 
@@ -108,40 +134,37 @@ local function AppendComparison(tooltip, link)
     -- equipped piece, since that's the one you'd actually replace.
     local isDouble = (doubleSlots ~= nil)
     local compareIlvl = isDouble and math.huge or 0
+    local hasEquipped = false
     for _, slotID in ipairs(slotIDs) do
-        local equippedLink = GetInventoryItemLink("player", slotID)
-        if equippedLink then
-            local eIlvl = GetEffectiveIlvl(equippedLink)
-            if eIlvl then
-                if isDouble then
-                    if eIlvl < compareIlvl then compareIlvl = eIlvl end
-                else
-                    if eIlvl > compareIlvl then compareIlvl = eIlvl end
-                end
+        local eIlvl = GetEquippedIlvl(slotID)
+        if eIlvl then
+            hasEquipped = true
+            if isDouble then
+                if eIlvl < compareIlvl then compareIlvl = eIlvl end
+            else
+                if eIlvl > compareIlvl then compareIlvl = eIlvl end
             end
         end
     end
     if isDouble and compareIlvl == math.huge then compareIlvl = 0 end
 
-    -- Nothing equipped in this slot — treat as 0 (any item is an upgrade).
-    local diff = hoverIlvl - compareIlvl
-
     local line
-    if diff > 0 then
-        line = "|cFF00CC00  Upgrade  +" .. diff .. " ilvl|r"
-    elseif diff < 0 then
-        line = "|cFFFF3333  Downgrade  " .. diff .. " ilvl|r"
+    if not hasEquipped then
+        line = "|cFF00CC00  New Slot  — equip this!|r"
     else
-        -- Same ilvl but not necessarily the same item.
-        if compareIlvl == 0 then
-            line = "|cFF00CC00  New Slot  — equip this!|r"
+        local diff = hoverIlvl - compareIlvl
+        if diff > 0 then
+            line = "|cFF00CC00  Upgrade  +" .. diff .. " ilvl|r"
+        elseif diff < 0 then
+            line = "|cFFFF3333  Downgrade  " .. diff .. " ilvl|r"
         else
             line = "|cFF949494  Same Item Level  (" .. hoverIlvl .. ")|r"
         end
     end
 
     tooltip:AddLine(line)
-    tooltip:Show()   -- refresh tooltip height
+    tooltip:Show()   -- refresh tooltip height (isProcessing guard prevents recursion)
+    isProcessing = false
 end
 
 -- ---------------------------------------------------------------------------
@@ -154,16 +177,16 @@ local function HookTooltips()
         TooltipDataProcessor.AddTooltipPostCall(Enum.TooltipDataType.Item, function(tooltip)
             if tooltip == GameTooltip or tooltip == ShoppingTooltip1
                or tooltip == ShoppingTooltip2 or tooltip == ItemRefTooltip then
-                local _, link = tooltip:GetItem()
-                AppendComparison(tooltip, link)
+                local ok, _, link = pcall(tooltip.GetItem, tooltip)
+                if ok then AppendComparison(tooltip, link) end
             end
         end)
     else
         local function HookOne(tt)
             if tt and tt.HookScript then
                 tt:HookScript("OnTooltipSetItem", function(self)
-                    local _, link = self:GetItem()
-                    AppendComparison(self, link)
+                    local ok, _, link = pcall(self.GetItem, self)
+                    if ok then AppendComparison(self, link) end
                 end)
             end
         end
@@ -177,10 +200,16 @@ end
 -- ---------------------------------------------------------------------------
 -- Public: Toggle
 -- ---------------------------------------------------------------------------
-function GA:Toggle()
-    enabled = not enabled
-    BoomerModeDB.gear.enabled = enabled
-    BoomerMode:Print("Gear Advisor " .. (enabled and "|cFF00FF00enabled|r." or "|cFFFF3333disabled|r."))
+function GA:ToggleTooltips()
+    tooltipsEnabled = not tooltipsEnabled
+    BoomerModeDB.gear.tooltipsEnabled = tooltipsEnabled
+    BoomerMode:Print("Gear Advisor Tooltips " .. (tooltipsEnabled and "|cFF00FF00enabled|r." or "|cFFFF3333disabled|r."))
+end
+
+function GA:ToggleDurability()
+    durabilityEnabled = not durabilityEnabled
+    BoomerModeDB.gear.durabilityEnabled = durabilityEnabled
+    BoomerMode:Print("Durability Alerts " .. (durabilityEnabled and "|cFF00FF00enabled|r." or "|cFFFF3333disabled|r."))
 end
 
 -- ---------------------------------------------------------------------------
@@ -203,7 +232,7 @@ function GA:GetDurabilityPct()
 end
 
 function GA:CheckDurability()
-    if not enabled then return end
+    if not durabilityEnabled then return end
     local now = GetTime()
     if now - lastDurabilityAlert < DURABILITY_ALERT_COOLDOWN then return end
 
@@ -269,45 +298,38 @@ local lastBagScan = 0
 local BAG_SCAN_COOLDOWN = 30
 
 function GA:ScanBagUpgrades()
-    if not enabled then return end
+    if not tooltipsEnabled then return end
     local now = GetTime()
     if now - lastBagScan < BAG_SCAN_COOLDOWN then return end
     lastBagScan = now
 
-    local bestUpgrade = nil
     for bag = 0, 4 do
         local numSlots = C_Container.GetContainerNumSlots(bag)
         for slot = 1, numSlots do
             local info = C_Container.GetContainerItemInfo(bag, slot)
             if info and info.hyperlink then
                 local link = info.hyperlink
-                local _, _, _, _, _, _, _, _, equipLoc = SafeGetItemInfo(link)
-                if equipLoc and equipLoc ~= "" and equipLoc ~= "INVTYPE_NON_EQUIP"
-                   and equipLoc ~= "INVTYPE_BAG" and equipLoc ~= "INVTYPE_QUIVER" then
+                local okItem, _, _, _, _, _, _, _, _, equipLoc = pcall(SafeGetItemInfo, link)
+                if okItem and equipLoc and equipLoc ~= ""
+                   and equipLoc ~= "INVTYPE_NON_EQUIP"
+                   and equipLoc ~= "INVTYPE_BAG"
+                   and equipLoc ~= "INVTYPE_QUIVER" then
                     local hoverIlvl = GetEffectiveIlvl(link)
-                    if hoverIlvl then
+                    if hoverIlvl and hoverIlvl > 0 then
                         local doubleSlots = DOUBLE_SLOTS[equipLoc]
-                        local slotIDs = doubleSlots or (EQUIP_SLOT[equipLoc] and {EQUIP_SLOT[equipLoc]})
+                        local slotIDs = doubleSlots or (EQUIP_SLOT[equipLoc] and { EQUIP_SLOT[equipLoc] })
                         if slotIDs then
-                            local isDouble = (#slotIDs > 1)
-                            local compareIlvl = isDouble and math.huge or 0
                             for _, slotID in ipairs(slotIDs) do
-                                local equippedLink = GetInventoryItemLink("player", slotID)
-                                if equippedLink then
-                                    local eIlvl = GetEffectiveIlvl(equippedLink)
-                                    if eIlvl then
-                                        if isDouble then
-                                            if eIlvl < compareIlvl then compareIlvl = eIlvl end
-                                        else
-                                            if eIlvl > compareIlvl then compareIlvl = eIlvl end
-                                        end
-                                    end
+                                local eIlvl = GetEquippedIlvl(slotID)
+                                if eIlvl and hoverIlvl > eIlvl then
+                                    BoomerMode.UI:ShowToast(
+                                        "Check Your Bags!",
+                                        "You may have a gear upgrade sitting in your bags. Hover over items to compare!",
+                                        "gold"
+                                    )
+                                    BoomerMode.UI:PlayAlert("quest")
+                                    return
                                 end
-                            end
-                            if isDouble and compareIlvl == math.huge then compareIlvl = 0 end
-                            local diff = hoverIlvl - compareIlvl
-                            if diff > 0 and (not bestUpgrade or diff > bestUpgrade.diff) then
-                                bestUpgrade = { name = info.itemName or "an item", diff = diff }
                             end
                         end
                     end
@@ -315,27 +337,26 @@ function GA:ScanBagUpgrades()
             end
         end
     end
-
-    if bestUpgrade then
-        BoomerMode.UI:ShowToast(
-            "You Have a Gear Upgrade!",
-            bestUpgrade.name .. " is +" .. bestUpgrade.diff .. " ilvl better than what you're wearing.",
-            "gold"
-        )
-        BoomerMode.UI:PlayAlert("quest")
-    end
 end
 
 -- ---------------------------------------------------------------------------
 -- Module lifecycle
 -- ---------------------------------------------------------------------------
 function GA:Initialize()
-    enabled = BoomerModeDB.gear.enabled ~= false
+    tooltipsEnabled   = BoomerModeDB.gear.tooltipsEnabled ~= false
+    durabilityEnabled = BoomerModeDB.gear.durabilityEnabled ~= false
+    -- Migrate old single-flag setting
+    if BoomerModeDB.gear.enabled ~= nil then
+        tooltipsEnabled   = BoomerModeDB.gear.enabled ~= false
+        durabilityEnabled = BoomerModeDB.gear.enabled ~= false
+        BoomerModeDB.gear.tooltipsEnabled   = tooltipsEnabled
+        BoomerModeDB.gear.durabilityEnabled = durabilityEnabled
+        BoomerModeDB.gear.enabled = nil
+    end
     HookTooltips()
 end
 
 function GA:OnEvent(event, ...)
-    if not enabled then return end
     if event == "UPDATE_INVENTORY_DURABILITY" then
         self:CheckDurability()
     elseif event == "BAG_UPDATE_DELAYED" or event == "PLAYER_EQUIPMENT_CHANGED" then
