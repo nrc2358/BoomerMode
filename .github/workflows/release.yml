@@ -10,10 +10,47 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - uses: BigWigsMods/packager@v2
+      - name: Package addon
+        run: |
+          zip -r BoomerMode.zip . \
+            -x "*.git*" \
+            -x ".github/*" \
+            -x "*.md" \
+            -x ".gitignore" \
+            -x ".pkgmeta"
+
+      - name: Upload to CurseForge
         env:
           CF_API_KEY: ${{ secrets.CF_API_KEY }}
           CURSE_ID: ${{ secrets.CURSE_ID }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Convert TOC interface number to version string (e.g. 120001 -> 12.0.1)
+          INTERFACE=$(grep -m1 "^## Interface:" BoomerMode.toc | sed 's/[^0-9]//g')
+          MAJOR=$((INTERFACE / 10000))
+          MINOR=$(( (INTERFACE % 10000) / 100 ))
+          PATCH=$((INTERFACE % 100))
+          VERSION_STR="$MAJOR.$MINOR.$PATCH"
+
+          # Look up the CurseForge numeric version ID for this game version
+          CF_VERSION_ID=$(curl -sf -H "X-Api-Token: $CF_API_KEY" \
+            "https://wow.curseforge.com/api/game/versions" | \
+            python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for v in data:
+              if v.get('name') == '$VERSION_STR':
+                  print(v['id']); sys.exit(0)
+          # Fallback: latest retail version (gameVersionTypeID 517)
+          retail = sorted([v for v in data if v.get('gameVersionTypeID') == 517], key=lambda x: x['id'], reverse=True)
+          if retail: print(retail[0]['id']); sys.exit(0)
+          sys.exit(1)
+          ")
+
+          curl -sf -X POST \
+            -H "X-Api-Token: $CF_API_KEY" \
+            -F "metadata={\"changelog\":\"Release $TAG\",\"gameVersions\":[$CF_VERSION_ID],\"releaseType\":\"release\",\"displayName\":\"$TAG\"}" \
+            -F "file=@BoomerMode.zip" \
+            "https://wow.curseforge.com/api/projects/$CURSE_ID/upload-file"
