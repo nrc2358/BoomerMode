@@ -13,12 +13,15 @@ jobs:
 
       - name: Package addon
         run: |
-          zip -r BoomerMode.zip . \
-            -x "*.git*" \
-            -x ".github/*" \
-            -x "*.md" \
-            -x ".gitignore" \
-            -x ".pkgmeta"
+          cd ..
+          zip -r BoomerMode/BoomerMode.zip BoomerMode \
+            -x "BoomerMode/.git*" \
+            -x "BoomerMode/.github/*" \
+            -x "BoomerMode/.vscode/*" \
+            -x "BoomerMode/*.md" \
+            -x "BoomerMode/.gitignore" \
+            -x "BoomerMode/.pkgmeta"
+          cd BoomerMode
 
       - name: Upload to CurseForge
         env:
@@ -27,30 +30,20 @@ jobs:
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
 
-          # Convert TOC interface number to version string (e.g. 120001 -> 12.0.1)
-          INTERFACE=$(grep -m1 "^## Interface:" BoomerMode.toc | sed 's/[^0-9]//g')
-          MAJOR=$((INTERFACE / 10000))
-          MINOR=$(( (INTERFACE % 10000) / 100 ))
-          PATCH=$((INTERFACE % 100))
-          VERSION_STR="$MAJOR.$MINOR.$PATCH"
-
-          # Look up the CurseForge numeric version ID for this game version
+          # Look up the CurseForge numeric version ID for 12.0.5
           CF_VERSION_ID=$(curl -sf -H "X-Api-Token: $CF_API_KEY" \
             "https://wow.curseforge.com/api/game/versions" | \
             python3 -c "
           import sys, json
           data = json.load(sys.stdin)
           for v in data:
-              if v.get('name') == '$VERSION_STR':
+              if v.get('name') == '12.0.5':
                   print(v['id']); sys.exit(0)
-          # Fallback: latest retail version (gameVersionTypeID 517)
-          retail = sorted([v for v in data if v.get('gameVersionTypeID') == 517], key=lambda x: x['id'], reverse=True)
-          if retail: print(retail[0]['id']); sys.exit(0)
           sys.exit(1)
           ")
 
           curl -sf -X POST \
             -H "X-Api-Token: $CF_API_KEY" \
-            -F "metadata={\"changelog\":\"Release $TAG\",\"gameVersions\":[$CF_VERSION_ID],\"releaseType\":\"release\",\"displayName\":\"$TAG\"}" \
+            -F "metadata={\"changelog\":\"Release $TAG\",\"gameVersions\":[$CF_VERSION_ID],\"releaseType\":\"beta\",\"displayName\":\"$TAG\"}" \
             -F "file=@BoomerMode.zip" \
             "https://wow.curseforge.com/api/projects/$CURSE_ID/upload-file"
