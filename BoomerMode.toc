@@ -1,0 +1,15 @@
+## Interface: 120001
+## Title: |cFFFFD700Boomer Mode|r
+## Notes: WoW simplified for groups with new and older players. Type /bm for help.
+## Version: 1.0.0
+## Author: GroupGuide
+## SavedVariables: BoomerModeDB
+## OptionalDeps: TomTom
+
+BoomerMode.lua
+modules/UI.lua
+modules/Arrow.lua
+modules/QuestWatcher.lua
+modules/GearAdvisor.lua
+modules/LeaderSync.lua
+modules/LootReminder.lua
